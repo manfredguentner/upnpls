@@ -1,0 +1,244 @@
+.\" Manpage for upnpls
+.\" Contact: Manfred <manfred@example.com>
+.\" SPDX-License-Identifier: BSD-2-Clause
+.TH UPNPLS 1 "2026-04-07" "upnpls 1.0" "terminal UPnP browser"
+.SH NAME
+upnpls \- terminal UPnP browser
+.SH SYNOPSIS
+.B upnpls
+.RI [ OPTIONS ] " " [ COMMAND ]...
+.SH DESCRIPTION
+upnpls is a POSIX shell script that scans for UPnP servers and renderers
+and provides a simple menu interface to list containers and items.
+
+The project was developed to explore POSIX sh and awk. It was developed on
+NetBSD 10 and tested on Debian (Raspberry Pi) and on WSL1 and WSL2 Debian.
+
+The main goal is to browse ContentDirectory devices and extract lists.
+There is minimal support for sending an item's URL to a renderer. This
+tool is intended as a utility rather than a full UPnP control point and
+is not fully compatible with all UPnP control point features.
+
+There is support for browsing pictures, but due to UPnP limitations only
+the first resolution is supported. I tested it with three UPnP servers
+and it worked on all of them. It is still possible to obtain the full
+metadata list, which contains all available information and resolutions.
+
+The script requires the following external programs: curl, socat,
+and xmllint (with xpath support). WSL1/2 does not require socat.
+
+Certain systems and virtual systems may not be compatible with 
+socat. Hardware or virtual interfaces who are in your LAN and not
+NAT to the host system have a good chance to work.
+
+Output may be formatted in several ways. Options and commands may be
+freely mixed. If an option is specified more than once, the getopt-style
+option takes precedence.
+.SH OPTIONS
+.TP
+.B \-s
+Show available UPnP devices. If no devices are buffered, a scan is
+performed. The device buffer is valid until midnight.
+.TP
+.B \-S
+Same as \-s but forces a scan. Useful when a device was just powered on.
+.TP
+.B \-l " menu-path"
+Display the menu for the specified menu-path or select an item. The path
+syntax begins with a dot. The path `.` is equivalent to `-s` but shows only
+ContentDirectory servers. In the menu, containers are marked with a `•`
+and items with a `»`.
+
+Examples:
+.RS
+.nf
+.1.1  •  Browse Folders
+.1.2  •  Music
+.1.3  •  Pictures
+.1.4  •  Video
+.fi
+.RE
+
+.RS
+.nf
+.1.2.52.1  »  Raga Bilaskhani Todi Vilambit
+.1.2.52.2  »  Raga Bilaskhani Todi Drut
+.1.2.52.3  »  Raga Bilaskhani Tarana
+.fi
+.RE
+
+.RS                            
+.nf
+The path `.1.2.52.1` means: 1st server device, 2nd category, 52nd album,
+1st song.
+.fi
+.RE
+
+.RS
+.nf
+You can invoke the menu as either:
+
+$ upnpls -l .3
+$ upnpls .3
+
+
+If both forms are provided (for example, `-l .3` and `.3`), the `-l`
+option is preferred.
+.fi
+.RE
+
+
+.RS
+.nf
+A simple range pattern is supported:
+
+$ upnpls .1.2.3:2-7   lists items 2 through 7
+$ upnpls .1.2.3:2,4,7 lists items 2, 4 and 7
+
+Mixed ranges and lists (for example `.1.2.3:2-4,6,9`) are not supported.
+.fi
+.RE
+
+.TP
+.B \-o target
+Define the output target and control output format. The argument *target*
+may be a renderer selection or an output format specifier.
+
+Examples:
+.RS
+.nf
+$ upnpls -l .3.2.1 -o .1
+$ upnpls .3.2.1@.1
+$ upnpls -l .3.2.1 @.1
+$ upnpls -o .3 .3.2.1
+
+
+The examples above send the audio/video stream from `.3.2.1` to renderer
+`.1`. `-o .` or `@.` lists all available renderer devices.
+.fi
+.RE
+
+.TP
+.B \-v
+Some output becomes different/verbose.
+.RS
+.nf
+$ upnpls -vs  prints device details eg. ControlURL's
+$ upnpls -vl .1.2.3 prints the real path on top and bottom of the menus.
+$ upnpls -v .1.2.3@f=meta prints single-decoded XML
+
+.fi
+.RE
+
+.SH "RENDERER COMMANDS"
+Renderer commands use the renderer id followed by an equals sign and a
+command:
+.TP
+.B .3=stop
+Stops the current stream.
+.TP
+.B .3=start
+Starts a stopped or paused stream.
+.TP
+.B .3=pause
+Pauses the current stream.
+.TP
+.B .3=?%
+Show current volume.
+.TP
+.B .3=80%
+Set volume to 80% (valid range: 0–100).
+.SH "OUTPUT FILTERS"
+Instead of a renderer you may use a filter:
+.RS
+.nf
+$ upnpls -l .1.2.3 -o f=url
+$ upnpls .1.2.3@f=url
+.fi
+.RE
+
+This prints the streaming URL of the item to stdout.
+
+Currently available filters:
+.TP
+.B f=url
+Prints the URL(s).
+.TP
+.B f=list
+Prints a list with `|` as delimiter. Format:
+.RS
+.nf
+Title|duration|URL|dev-path|internal|internal
+
+Duration may be `-1` if there is no duration.
+dev-path is the internal server ID. Every server
+uses its own ID syntax. Use it if you build a script
+that connects the server directly. 
+.fi
+.RE
+
+.TP
+.B f=meta
+Prints the DIDL-Lite HTML-encoded meta XML. The output is double-encoded;
+decode it once to obtain readable XML. If titles contain encoded
+characters (for example `&amp;`), decode the title a second time.
+.SH EXAMPLES
+.TP
+.B upnpls -s
+List available UPnP devices (use `-S` to force a scan).
+.TP
+.B upnpls -l .3.2.1 -o .1=50%
+Play item `.3.2.1` on renderer `.1` with volume 50% (same as
+`upnpls .3.2.1@.1=50%`).
+.TP
+.B upnpls -l .3.2.1:4-7 -o f=url
+List the URLs of items 4–7 (same as `upnpls .3.2.1:4-7@f=url`).
+.TP
+.B upnpls .3.2.1.1@f=url | mpv --quiet --volume=50 --playlist=-
+Pipe the URL to mpv.
+.TP
+.B upnpls .3.2.1.1@f=url | xargs curl -s | feh -
+Display the picture with the feh image viewer.
+.TP
+.nf
+.B
+upnpls .3.2.1:3-8@f=list | awk -F"|" 'BEGIN{printf "%s\\n","#EXTM3U"}{printf "#EXTINF:%s,%s\\n%s\\n", $2, $1,$3}'
+.fi
+Create an M3U playlist for items 3–8 in menu-path `3.2.1`.
+.TP
+.B upnpls .1.2.3@f=meta | recode html..utf8 | xmllint --format -
+Decode the DIDL-Lite metadata into readable XML. If titles contain encoded
+characters they may require a second decoding.
+.SH FILES
+.TP
+.B $HOME/.upnplsrc/
+Directory containing the scan buffer file `upnpdevices-YYYYMMDD`. Leave the 
+buffer file alone. Every scan will overwrite it.
+.TP
+.B $HOME/.upnplsrc/config
+A simple configuration file used to sort devices because the scan order
+can be random. To fix device ordering, add a line such as:
+.RS
+.nf
+deviceorder="MyUPnPServer|MyUPnPSpeakers1|MyUPnPSpeakers2"
+
+Devices not listed will appear at the end of the list.
+.fi
+.RE
+
+.TP
+.B $HOME/.upnplsrc/lib/wsl_scan.ps1
+Needed only when using WSL. Neither WSL1 nor WSL2 provide a real network
+device for socat, so wsl_scan.ps1 is used instead of socat. upnpls detects
+WSL and uses wsl_scan.ps1 when appropriate. The script contains PowerShell
+and will not run on Linux or BSD.
+.SH BUGS
+Keep or fix them. It is just sh.
+.SH AUTHOR
+Written by Manfred Güntner
+.SH "REPORTING BUGS"
+https://codeberg.org/mague/upnpls/issues
+.SH COPYRIGHT
+Copyright © 2026 Manfred Güntner
+This software is distributed under the BSD 2‑clause License; see the
+LICENSE file.

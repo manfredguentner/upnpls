@@ -1,0 +1,1025 @@
+#!/usr/bin/env sh
+#
+# Copyright (c) 2026, Manfred Güntner
+#   SPDX-License-Identifier: BSD-2-Clause 
+#	
+# 
+# 
+# shellcheck disable=SC2317
+# shellcheck disable=SC2034
+# 
+#####################
+#set -e
+#trap 'echo "Fehler in Zeile $LINENO"; exit 1' ERR
+#####################
+
+#One single test :)
+# $HOME is Posix but ...
+if [ -z "${HOME+x}" ]; then
+  printf "%s\n" "\$HOME is not set"
+	exit 1
+elif [ -z "${HOME}" ]; then
+  printf "\$HOME is set but empty"
+	exit 1
+fi
+
+
+# Main function
+
+main() {
+	# some vars
+	scan=0
+	rescan=0
+	verbose=0
+	curses=0
+	metaflag=0
+
+  # getopts and usage
+  usage=$(do_usage)
+  if [ "$#" -eq 0 ]; then print "${usage}"; exit 0; fi
+
+	while getopts hl:no:sSv _opt
+	do
+		case $_opt in
+			h)  print "${usage}"; exit 0;;	
+			l)	l="${OPTARG}";;
+			n)  curses=1 ;;
+			o)	o="${OPTARG}";;
+			s)	scan=1;;
+			S)	rescan=1;;
+			v)	verbose=1;;
+		 \?)  print "${usage}"; exit 0;;
+		esac
+	done
+	shift $((OPTIND - 1))
+	# Fixt the most common typos. .. and space
+	remain=$(print "$@" | sed 's/\.\./\./g; s/[[:space:]]//g')
+	l=$(print "${l}" | sed 's/\.\./\./g; s/[[:space:]]//g')
+	o=$(print "${o}" | sed 's/\.\./\./g; s/[[:space:]]//g')
+
+	do_it
+}
+
+do_it() {
+# main and do_it are seperated to be able to
+# jump back if needed (curses interface osae)
+
+# Devices first
+	devices=$(get_devices "${rescan}")
+
+# Option parsing and merging
+	#remain 
+	preat=$(print "${remain}" | awk 'BEGIN{FS="@"}{print $1}')
+	rbrowsepath=$(print "${preat}" | awk 'BEGIN{FS=":"}{print $1}')
+	rrange=$(print "${preat}" | awk 'BEGIN{FS=":"}{print $2}')
+
+	rpostat=$(print "${remain}" | awk 'BEGIN{FS="@"}{print $2}')
+	rtarget=$(print "${rpostat}" | awk 'BEGIN{FS="="}{print $1}')
+	raction=$(print "${rpostat}" | awk 'BEGIN{FS="="}{print $2}')
+
+	# options
+	obrowsepath=$(print "${l}" | awk 'BEGIN{FS=":"}{print $1}')
+	orange=$(print "${l}" | awk 'BEGIN{FS=":"}{print $2}')
+
+	otarget=$(print "${o}" | awk 'BEGIN{FS="="}{print $1}')
+	oaction=$(print "${o}" | awk 'BEGIN{FS="="}{print $2}')
+
+	# options have priority when merging
+  obrowsepath="${obrowsepath:=$rbrowsepath}"
+  orange="${orange:=$rrange}"
+  otarget="${otarget:=$rtarget}"
+  oaction="${oaction:=$raction}"
+
+	# do we have dots and is the number sane ?
+
+	case "${obrowsepath}" in
+		"") browsepath="${obrowsepath}" ;;
+		 .) browsepath="${obrowsepath}" ;;
+
+		.*) 
+				if print "${obrowsepath}" | grep -vqE "^[0-9.]+$" ; then
+						print "'${obrowsepath}' not a valid path"
+						exit 1
+				else 
+					browsepath="${obrowsepath}"
+				fi
+
+				browsepathdevice=$(print "${browsepath}" | awk -F "." '{print $2}')	
+
+				t1=$(print "${devices}" | awk -F"|" -v l="${browsepathdevice}" '
+																		BEGIN { gsub(/\./, "", l) } 
+																		($1 == "ContentDirectory" && NR == l) { print NR }')
+				t1=$(printf "%d" "${t1#:=0}")
+
+				if [ "$(print "${browsepath}" | awk -F "." '{print $2}')" -le 0 ] ||\
+					 [ "${t1}" -eq 0  ]; then
+
+					print "'${browsepath}' not a valid path"
+					exit 1
+				fi
+				;;
+		*)	print "'${obrowsepath}' not a valid path"
+				exit 1
+				;;
+	esac
+
+	# range
+	# :2 oder :1-2 oder :1,2,6,9
+	if [ "${orange}" != "" ]; then
+		#:1
+		if print "${orange}" | grep -qE "^[0-9]+$" ; then
+			select="${orange}p;"
+		#:1-2
+		elif print "${orange}" | grep -qE "^[0-9-]+$" ; then
+			t1=$(print "${orange}" | awk 'BEGIN{FS="-"}{print $1}')
+			t2=$(print "${orange}" | awk 'BEGIN{FS="-"}{print $2}')
+			select=$(awk -v a="${t1}" -v b="${t2}" 'BEGIN {for (i=a; i<=b; i++) printf "%s", i"p;"}' )
+		# is :1,2
+		elif print "${orange}" | sed 's/^,//g; s/,$//g' | grep -qE "^[0-9,]+$" ; then
+			select=$(print "${orange}" | awk -F "," '{for (i=1; i<=NF; i++) printf "%s", $i"p;"}')
+		else
+			select="p;"
+		fi      
+	else
+		select="p;"
+	fi
+
+	# target
+	if [ "${otarget}" != "" ]; then
+
+		case "${otarget}" in
+			.) target="${otarget}"
+				;;
+			.*) # shellcheck disable=SC2046 
+				
+				if print "${otarget}" | grep -vqE "^[0-9.]+$" ; then
+            print "'${otarget}=${oaction}' not a valid option"
+            exit 1
+        else 
+         	target="${otarget}"
+					
+					t1=$(print "${target}" | sed 's/\.//g')	
+      		avcontrolURL=$(print "${devices}" | sed "${t1}q;d" | awk -F "|" '{print $5}')
+      		rccontrolURL=$(print "${devices}" | sed "${t1}q;d" | awk -F "|" '{print $6}')
+      		avdeviceName=$(print "${devices}" | sed "${t1}q;d" | awk -F "|" '{print $3}')
+					# play pause stop  [0-9]|[0-9][0-9]|100 ?				
+
+					case "${oaction}" in
+						"" ) 		action="${oaction}" ;;
+						[?] )		action="${oaction}" ;;
+						[?]% )		action="${oaction}" ;;
+						start ) 	action="${oaction}" ;;
+						stop )  	action="${oaction}" ;;
+						pause ) 	action="${oaction}" ;;
+						[0-9]%|[0-9][0-9]%|100% ) action="${oaction}" ;;
+						* ) 			print "'${otarget}=${oaction}' not a valid option"
+										exit 1
+							;;
+					esac
+
+        fi
+				# shellcheck disable=SC2046
+       	otargetdevice=$(print "${otarget}" | awk -F "." '{print $2}')
+ 
+        t1=$(print "${devices}" | awk -F"|" -v l="${otargetdevice}" '
+                                    BEGIN { gsub(/\./, "", l) }
+                                    ($1 == "AVTransport" && NR == l) { print NR }')
+        t1=$(printf "%d" "${t1#:=0}")
+
+        if [ "$(print "${otarget}" | awk -F "." '{printf "%d", $2}')" -le 0 ] ||\
+					 [ "${t1}" -eq 0 ]; then
+          print "'${otarget}=${oaction}' not a valid option"
+          exit 1
+        fi
+				;;
+			f|filter)
+
+				case "${oaction}" in
+					name)	target="${otarget}"; action="${oaction}"
+							;;
+					list)	target="${otarget}"; action="${oaction}"
+							;;
+					meta)	target="${otarget}"; action="${oaction}"
+							;;
+					 url) target="${otarget}"; action="${oaction}"
+							;;
+						*) print "'@${otarget}=${oaction}' not a valid option"
+							 exit 1 ;;
+				esac
+				;;
+			*) print "'@${otarget}=${oaction}' not a valid option"
+				 exit 1 ;;
+		esac
+	fi
+
+# End Option parsing and merging
+
+	# Show devices on -s -S and .
+	# $1 =devices $2= av, cd or all  $3=verboseflag
+
+	if [ ${scan} -eq 1 ]||[ ${rescan} -eq 1 ]; then 
+		show_devices "${devices}" "all" "${verbose}"
+		exit 0
+	fi
+	if [ "${browsepath}" = "." ]||[ "${target}" = "." ]; then
+
+		if [ "${browsepath}" = "." ]; then
+			show_devices "${devices}" "cd" "0"
+		fi
+		if [ "${target}" = "." ]; then
+			show_devices "${devices}" "av" "0"
+		fi
+		exit 0	
+	fi
+
+	# Get the data from the selected device
+	
+	devicenum=$(print "${browsepath}" | awk -F "." '{print $2}')
+	cdcontrolURL=$(print "${devices}" | sed "${devicenum}q;d" | awk -F "|" '{print $5}')
+	plen=$(print "${browsepath}" | awk -F "." '{gsub(/^./,"",$0); print NF}')	
+
+
+	i=1
+	asciipath="#"$(print "${devices}" | sed "${devicenum}q;d" | awk -F "|" '{print $3}')
+	while [ ${i} -le "${plen}" ]	
+	do
+		
+		if [  ${metaflag} -eq 1 ]; then
+			# exit if we are already on item level
+			print "Path '${browsepath}' is not valid"
+			exit 1
+		fi
+
+		pathpos=$(print "${browsepath}" | awk -F "." -v i="${i}" '{i++; print $i}') 
+
+		if [ "${i}" -gt 1 ]; then
+    	asciipath="${asciipath}/$(print "${result}" | sed "${pathpos}q;d" | awk -F "|" '{print $1}')"
+		fi
+
+		id=$(print "${result}" | sed -n "${pathpos}p" | awk -F "|" '{print $4}')
+
+		base=$(print "${result}" | sed -n "${pathpos}p" | awk -F "|" '{print $NF}')
+		base=${base:=•}
+
+		result=""
+
+		if [ ${i} -eq 1 ]; then id=0; fi
+
+		if [ "${base}" = "•" ]; then 
+
+  		content=$(get_content "${cdcontrolURL}" "${id}" \
+              | xmllint --quiet --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' - 2>/dev/null \
+              | do_recode )
+		else
+
+    	content=$(get_meta "${cdcontrolURL}" "${id}" \
+              | xmllint --quiet --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' - 2>/dev/null \
+              | do_recode )
+			metaflag=1
+		fi
+
+
+  	# container
+  	container=$(print "${content}" | xmllint --quiet --xpath '
+                //*[local-name() = "container"]/*[local-name() = "title"]/text() |
+                //*[local-name() = "container"]/@id ' - 2>/dev/null \
+                | awk '{getline n;
+                        gsub(" id=\"","",$0); gsub("\"","",$0);
+                        print n"| | |"$0"|1|2|•"}' )
+ 
+		if [ ${#container} -gt 0 ]; then 
+			result="${container}" 
+		fi
+
+  	# items
+  	itemtmp=$(print "${content}" | xmllint --quiet --xpath '//*[local-name() = "item"]' - 2>/dev/null )
+
+  	if [ ${#itemtmp} -gt 0 ]; then
+
+			print "${content}" \
+			| xmllint --quiet --xpath '//*[local-name() = "item"]/*[local-name() = "res"]/@duration' - >/dev/null 2>&1
+
+			# Needs maybe a better solution. On NetBSD $? is 11, on Debian 10
+			# But for now -ge 10 is fine
+			if [ $? -ge 10 ]; then
+
+				container=$(print "${content}" | xmllint --quiet --xpath '
+					//*[local-name() = "item"]/*[local-name() = "title"]/text() |
+					//*[local-name() = "item"]/*[local-name() = "res"]/text() |						
+					//*[local-name() = "item"]/@id' - 2>/dev/null )
+
+				# sad hack until there is a better solution to handle
+				# multiple res nodes
+				container=$(print "${container}" | awk '
+
+												# Reset seen when we hit a non-http line
+															$0 !~ /^http/ {
+    													seen=0
+    													print
+    													next
+												}
+
+												# First http in this block
+												($0 ~ /^http/ && seen==0) {
+    													seen=1
+    													print
+    													next
+												}
+
+												# All later http lines
+												($0 ~ /^http/ && seen==1) {
+    													next
+												}')
+				# End sad hack
+				container=$(print "${container}" | awk '{id=$0; getline title; getline url; 
+									gsub(" id=\"","",id); gsub("\"","",id);
+									print title"|-1|"url"|"id"|1|2|»"}' ) 
+
+				#"$_title|$_dur|$_url|$_id|1|2|»"
+			else
+				container=$(print "${content}" | xmllint --quiet --xpath '
+					//*[local-name() = "item"]/*[local-name() = "title"]/text() |
+					//*[local-name() = "item"]/*[local-name() = "res"]/@duration |
+					//*[local-name() = "item"]/*[local-name() = "res"]/text() |						
+					//*[local-name() = "item"]/@id' - 2>/dev/null \
+					| awk '{id=$0; getline title; getline dur; getline url; 
+									gsub(" duration=\"","",dur); gsub("\"","",dur);
+									gsub(" id=\"","",id); gsub("\"","",id);
+									print title"|"dur"|"url"|"id"|1|2|»"}' ) 
+
+			fi
+
+			if [ ${#result} -gt 0 ]; then
+				result=$(printf "%s\n%s" "${result}" "${container}")
+			else
+				result="${container}"
+			fi
+		fi
+
+		i=$((i+1))
+
+	done
+
+
+	# Print the desired output
+
+	case "${target}" in
+
+		.*)	
+			case "${action}" in
+				"")
+					media_render "${result}"
+					;;
+				\?%)
+					print "Volume ${avdeviceName}: $(get_volume "${rccontrolURL}")/100"
+					;;
+				[0-9]%|[0-9][0-9]%|100%)
+					
+					print "Setting volume ${avdeviceName} to: ${action%*\%}/100"
+					set_volume "${rccontrolURL}" "${action}"
+					;;
+				 stop)
+					stop_transport "${avcontrolURL}"
+					;;
+				play)
+					play_transport "${avcontrolURL}"
+					;;
+				pause)
+					pause_transport "${avcontrolURL}"
+					;;
+			esac
+			;;
+		f|filter)
+			case "${action}" in
+				url)
+					print "${result}" | awk -F "|" '{if ($NF ~ /»/) print $3}' \
+						| sed -n "${select}"
+					;;
+				list)
+					print "${result}" | do_recode \
+						| awk -F "|" '{if ($NF ~ /»/) print $0}' \
+						| sed -n "${select}"
+					;;
+				meta)
+					print "${result}" | awk -F "|" '{if ($NF ~ /»/) print $4}' \
+						| sed -n "${select}" | while read -r line
+						do
+							if [ "${verbose}" -eq 1 ]; then
+								get_meta "${cdcontrolURL}" "${line}" \
+									| xmllint --quiet --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' - | do_recode
+							else
+								get_meta "${cdcontrolURL}" "${line}" \
+									| xmllint --quiet --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' -
+							fi
+						done
+					;;
+			esac
+			;;
+		*)
+				if [ "${verbose}" -eq 1 ]; then
+					print "${asciipath}"
+					print "${result}" | do_recode \
+						| awk -F "|" -v bp="${browsepath}" '{print bp"."NR" "$7" "$1}' \
+						| sed -n "${select}"	
+					print "${asciipath}"
+				else
+					print "${result}" | do_recode \
+						| awk -F "|" -v bp="${browsepath}" '{print bp"."NR" "$7" "$1}' \
+						| sed -n "${select}"	
+				fi
+			;;
+	esac
+
+	exit 0
+
+} # END MAIN
+
+#### functions ####
+
+show_devices() {
+# $1 =devices $2= a or c $3=verboseflag
+
+		sd_verbose="$3"
+    sd_i=1
+		sd_line=""
+
+    print "$1" | while read -r sd_line
+    do
+      if [ "${sd_verbose}" -eq 0 ]; then
+				if [ "$2" = "av" ]; then
+        	print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^AVTransport/{print      "Renderer: ."i" "$3}'
+				elif [ "$2" = "cd" ]; then
+        	print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^ContentDirectory/{print "Server:   ."i" "$3}'
+				elif [ "$2" = "all" ]; then
+					print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^AVTransport/{print      "Renderer: ."i" "$3}'
+					print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^ContentDirectory/{print "Server:   ."i" "$3}'
+				fi
+      elif [ "${sd_verbose}" -eq 1 ]; then
+        print "${sd_line}"
+      fi
+    sd_i=$((sd_i+1))
+    done
+
+		unset -v sd_verbose sd_i sd_line
+}
+
+get_devices() {
+# get devices
+
+	gd_devicedir="$HOME/.${0##*/}rc"
+#	gd_devicefile="${gd_devicedir}/upnpdevices-$PPID"
+	gd_date=$(date +"%Y%m%d")
+	gd_devicefile="${gd_devicedir}/upnpdevices-${gd_date}"
+	gd_config="${gd_devicedir}/config"
+  gd_devices=""
+	gd_rescan="$1"
+	gd_order=""
+
+	if [ ! -d "${gd_devicedir}" ]; then
+    #mkdir "${gd_devicedir}"
+		init_files
+  fi
+
+	if [ ! -e "${gd_devicefile}" ]; then
+		rm "${gd_devicedir}"/upnpdevices-* 2>/dev/null
+	fi
+
+	if [ -e "${gd_devicefile}" ]&&[ "${rescan}" -eq 1 ]; then
+		rm "${gd_devicefile}"
+	fi
+
+  if [ -e "${gd_devicefile}" ]; then
+    gd_devices=$(cat "${gd_devicefile}")
+#		gd_devices=$(is_online "${gd_devices}")
+  else
+    gd_devices=$(do_discover)
+
+		if [ -e "${gd_config}" ]; then
+			#gd_order=$( cat "${gd_config}" | awk '/^deviceorder/ {gsub(/deviceorder\=\"/,"",$1);gsub(/\"/,"",$0);print}') 
+			gd_order=$(awk '/^deviceorder/ {gsub(/deviceorder\=\"/,"",$1);gsub(/\"/,"",$0);print}' "${gd_config}") 
+
+			if [ "${gd_order:=false}" = "false" ]; then
+				print "${gd_devices}" > "${gd_devicefile}"
+			else
+				print "${gd_devices}" | awk -F "|" -v order="${gd_order}" '
+				function trim(s) {
+  				sub(/^[ \t\r\n]+/, "", s)
+  				sub(/[ \t\r\n]+$/, "", s)
+  				return s
+				}
+				BEGIN {
+  				n = split(order, a, "|")
+  				for (i = 1; i <= n; i++) map[tolower(a[i])] = i
+				}
+				{
+  				field = trim($3) # change $2 to the field you want
+  				key = tolower(field)
+  				if (key in map) {
+    				idx = map[key]
+    				bucket[idx] = (bucket[idx] ? bucket[idx] ORS : "") $0
+  				} else {
+    				unmatched = (unmatched ? unmatched ORS : "") $0
+  				}
+				}
+				END {
+  				for (i = 1; i <= n; i++) if (bucket[i]) print bucket[i]
+  				if (unmatched) print unmatched
+				}' > "${gd_devicefile}"
+			fi
+		else
+			print "${gd_devices}" > "${gd_devicefile}"
+		fi
+  fi
+
+  # shellcheck disable=SC2046
+  if [ $(print "${gd_devices}" | awk '{printf "%i", NF}') -eq 0 ]; then
+    print "No devices found"
+    exit 1
+  else
+    #print "${gd_devices}"
+		cat "${gd_devicefile}"
+  fi
+
+  unset -v gd_devices gd_devicefile gd_devicedir 
+	unset -v gd_config gd_rescan gd_order gd_date
+
+}
+
+is_wsl() {
+# are we in a WSL1/2 environment ?
+# WSL is not able to scan with socat
+# Thats why we need to know
+
+    case "$(uname -r)" in
+        *[Mm]icrosoft*) return 0 ;;
+    esac
+    [ -f /proc/sys/fs/binfmt_misc/WSLInterop ] && return 0
+    [ -n "$WSL_DISTRO_NAME" ] && return 0
+    return 1
+}
+
+is_online() {
+
+	io_line=""
+	io_decr=""
+	io_tmp0=""
+
+	print "$1" | while read -r io_line
+	do
+		io_decr=$(print "${io_line}" | awk 'BEGIN{FS="|"}{print $4}')
+		io_tmp0=$(curl -s --connect-timeout 0.5 "${io_decr}" )
+		if [ ${#io_tmp0} -le 0 ]; then
+			print "${io_line}" | awk 'BEGIN{FS="|"; OFS="|"}{$NF="offline"; print $0}'
+		else
+			print "${io_line}" | awk 'BEGIN{FS="|"; OFS="|"}{$NF="online"; print $0}'
+		fi
+	done
+	
+	unset -v io_line io_decr io_tmp0
+}
+
+do_discover() {
+
+  dd_discovery=""
+  dd_line=""
+	dd_dev=""
+	dd_devicexml=""
+	dd_cd=""
+	dd_rc=""
+	dd_av=""
+	dd_friendlyName=""
+	dd_burl=""
+	dd_devicedir="$HOME/.${0##*/}rc"
+
+  dd_socat1="M-SEARCH * HTTP/1.1"
+  dd_socat2="HOST: 239.255.255.250:1900"
+  dd_socat3="MAN: \"ssdp:discover\""
+  dd_socat4="MX: 3"
+  dd_socat5="ST: ssdp:all"
+
+	if is_wsl; then
+	
+		dd_discovery=$(powershell.exe -ExecutionPolicy Bypass -File "${dd_devicedir}/lib/wsl_scan.ps1" \
+			| tr -d '\r' | grep -i Location | sort | uniq )
+	else
+	
+		dd_discovery=$(printf "%s\r\n%s\r\n%s\r\n%s\r\n%s\r\n\r\n\r\n" \
+									"${dd_socat1}" "${dd_socat2}" "${dd_socat3}" "${dd_socat4}" "${dd_socat5}" \
+	 	| socat - UDP4-DATAGRAM:239.255.255.250:1900,broadcast,so-broadcast \
+		| tr -d '\r' |  grep -i location | sort | uniq )
+	fi
+  print "${dd_discovery}" | grep "\.xml$" | while read -r dd_line
+  do
+    print "${dd_line}" | sed 's/Location: //Ig' | while read -r dd_dev
+    do
+      dd_devicexml=$(curl -s "${dd_dev}" | xmllint --xpath '//*[local-name() = "device"]' - 2>/dev/null)
+
+      dd_cd=$(print "${dd_devicexml}" | \
+      xmllint --xpath '//serviceList/service[serviceType="urn:schemas-upnp-org:service:ContentDirectory:1"]/controlURL/text()' - 2>/dev/null | \
+      head -n1)
+
+      dd_rc=$(print "${dd_devicexml}" | \
+      xmllint --xpath '//serviceList/service[serviceType="urn:schemas-upnp-org:service:RenderingControl:1"]/controlURL/text()' - 2>/dev/null | \
+      head -n1)
+
+      dd_av=$(print "${dd_devicexml}" | \
+  		xmllint --xpath '//serviceList/service[serviceType="urn:schemas-upnp-org:service:AVTransport:1"]/controlURL/text()' - 2>/dev/null | \
+      head -n1 )
+
+      dd_friendlyName=$(print "${dd_devicexml}" | xmllint --xpath '//*/friendlyName/text()' - 2>/dev/null)
+      dd_burl=$(print "${dd_dev}" | awk -F "/" '{print $1"//"$3}')
+
+      if [ "${dd_av}" != "" ]&&[ "${dd_rc}" = "" ]; then
+        print "AVTransport|0|${dd_friendlyName}|${dd_dev}|${dd_burl}${dd_av}|0|online"
+      fi
+      if [ "${dd_av}" != "" ]&&[ "${dd_rc}" != "" ]; then
+        print "AVTransport|0|${dd_friendlyName}|${dd_dev}|${dd_burl}${dd_av}|${dd_burl}${dd_rc}|online"
+      fi
+      if [ "${dd_cd}" != "" ]; then
+        print "ContentDirectory|0|${dd_friendlyName}|${dd_dev}|${dd_burl}${dd_cd}|0|online"   
+      fi
+    done
+  done
+
+  unset -v dd_discovery dd_line dd_dev dd_devicexml 
+	unset -v dd_cd dd_rc dd_av dd_friendlyName dd_burl
+	unset -v dd_socat1 dd_socat2 dd_socat3 dd_socat4 dd_socat5
+
+}
+
+init_files() {
+# do the init on first run
+	if_path="$HOME/.${0##*/}rc"
+
+	# create directories
+	mkdir "${if_path}"
+	mkdir "${if_path}/lib"
+
+	# create a example config
+	cat <<'EOF' >"${if_path}/config"
+# Sort your devices here. First is 1, second is .2 etc.
+# Devices not listed will appear at the end of the list
+#
+# deviceorder="MyUPnPServer|MyUPnPSpeakers1|MyUPnPSpeakers2|etc"
+EOF
+
+	# create the powershell socat replacement for WLS
+	cat <<'EOF' >"${if_path}/lib/wsl_scan.ps1"
+try {
+    $sock = New-Object System.Net.Sockets.Socket([System.Net.Sockets.AddressFamily]::InterNetwork,
+                                                [System.Net.Sockets.SocketType]::Dgram,
+                                                [System.Net.Sockets.ProtocolType]::Udp)
+    # Verbindung zu einem öffentlichen Ziel (kein Datenverkehr wird tatsächlich gesendet)
+    $sock.Connect("8.8.8.8", 53)
+    $localEP = $sock.LocalEndPoint
+    $localIP = $localEP.Address.ToString()
+    $sock.Close()
+} catch {
+    Write-Error "Could not determine local IP via socket method: $_"
+    exit 1
+}
+
+if (-not $localIP) {
+    Write-Error "No valid local IPv4 address found."
+    exit 1
+}
+
+$multicastAddress = "239.255.255.250"
+$port = 1900
+
+$request = @"
+M-SEARCH * HTTP/1.1
+HOST: ${multicastAddress}:${port}
+MAN: "ssdp:discover"
+MX: 3
+ST: ssdp:all
+
+
+"@
+
+$bytes = [Text.Encoding]::ASCII.GetBytes($request)
+
+# Bind to the detected local IP
+$localEP = New-Object System.Net.IPEndPoint ([System.Net.IPAddress]::Parse($localIP)), 0
+
+$udpClient = New-Object System.Net.Sockets.UdpClient($localEP)
+$udpClient.JoinMulticastGroup([System.Net.IPAddress]::Parse($multicastAddress))
+
+$remoteEP = New-Object System.Net.IPEndPoint ([System.Net.IPAddress]::Parse($multicastAddress)), $port
+
+# Send request
+$udpClient.Send($bytes, $bytes.Length, $remoteEP) | Out-Null
+Write-Host "M-SEARCH sent via $localIP..."
+
+# Collect responses
+$timeoutMs = 5000
+$stopWatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+while ($stopWatch.ElapsedMilliseconds -lt $timeoutMs) {
+    if ($udpClient.Available -gt 0) {
+        $remote = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+        $responseBytes = $udpClient.Receive([ref]$remote)
+        $response = [Text.Encoding]::ASCII.GetString($responseBytes)
+        Write-Host "Response from $($remote.Address):`n$response`n---`n"
+    } else {
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+$udpClient.Close()
+
+EOF
+}
+
+media_render() {
+ 
+	mr_count=""
+	mr_line=""
+	mr_dur="" 
+	mr_r=""
+	mr_t=""
+	mr_m=""
+
+  mr_count=$(print "$1" | wc -l)
+
+  print "$1" | while read -r mr_line
+  do
+    mr_dur=$(print "${mr_line}" | awk -F "|" '{print $2}')
+    if [ "${mr_dur}" != "-1" ]; then
+      mr_dur=$(print "${mr_dur}" | awk '{gsub(":",".", $0);print $0}')
+      mr_dur=$(print "${mr_dur}" | awk -F "." '{print $1*3600+$2*60+$3"."$4}')
+    fi
+
+    mr_r=$(print "${mr_line}" | awk -F "|" '{print $3}')
+
+    mr_t=$(print "${mr_line}" | awk -F "|" '{print $1}')
+
+    mr_m=$(print "${mr_line}" | awk -F "|" '{print $4}')
+
+    mr_m=$(get_meta "${cdcontrolURL}" "${mr_m}" | xmllint --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' - 2>/dev/null )
+
+
+    set_transport "${avcontrolURL}" "${mr_r}" "${mr_m}"
+    play_transport "${avcontrolURL}"
+
+#   if [ $_mr_dur -gt 0 ]&&[ $_mr_count -gt 1 ]; then
+    if [ "${mr_dur}" != "-1" ]&&[ "${mr_count}" -gt 1 ]; then
+# Progress is nice but takes time in a world with
+# 0.11 seconds :)
+#     For i in $(seq -w 1 $_dur)
+#     do
+#       sleep 1;
+#       printf "\rStreaming: $_t [$i/$_dur]"
+#     done
+#     echo
+      print "Streaming: ${mr_t}"
+      print "Volume: $(get_volume "${rccontrolURL}")/100"
+      sleep "${mr_dur}"
+    fi
+    if [ "${mr_dur}" = "-1" ]; then
+      print "Streaming to ${avdeviceName}: ${mr_t}"
+      print "Volume: $(get_volume "${rccontrolURL}")/100"
+      break
+    fi
+  done
+ 
+  unset mr_count mr_line mr_dur mr_r mr_t mr_m
+
+}
+
+set_transport() {
+# $1=url 2=surl 3=meta
+
+	set_data=""
+
+  set_data=$(cat <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+      <InstanceID>0</InstanceID>
+                <CurrentURI>$2</CurrentURI>
+        <CurrentURIMetaData>$3</CurrentURIMetaData>
+    </u:SetAVTransportURI>
+  </s:Body>
+</s:Envelope>
+EOF
+)
+  curl -X POST \
+    -H "SOAPAction: \"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI\"" \
+    -H "Content-Type: text/xml; charset=utf-8" \
+    -d "${set_data}" -s "$1" >/dev/null
+	
+	unset set_data
+}
+
+play_transport() {
+
+	play_data=""
+
+  play_data=$(cat <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Play xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+      <InstanceID>0</InstanceID>
+      <Speed>1</Speed>
+    </u:Play>
+  </s:Body>
+</s:Envelope>
+EOF
+)
+  curl -X POST \
+    -H "SOAPAction: \"urn:schemas-upnp-org:service:AVTransport:1#Play\"" \
+    -H "Content-Type: text/xml; charset=utf-8" \
+    -d "${play_data}" \
+    -s "$1" >/dev/null
+
+	unset play_data
+}
+
+stop_transport() {
+
+		stop_data="" 
+
+    stop_data=$(cat <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+      <InstanceID>0</InstanceID>
+    </u:Stop>
+  </s:Body>
+</s:Envelope>
+EOF
+)
+	curl -s -X POST -H "SOAPAction: \"urn:schemas-upnp-org:service:AVTransport:1#Stop\"" \
+  	-H "Content-Type: text/xml; charset=utf-8" -d "${stop_data}" -s "$1" >/dev/null
+
+	unset stop_data
+}
+
+pause_transport() {
+
+		pause_data=""
+
+    pause_data=$(cat <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:Pause xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+      <InstanceID>0</InstanceID>
+    </u:Pause>
+  </s:Body>
+</s:Envelope>
+EOF
+)
+
+	curl -s -X POST -H "SOAPAction: \"urn:schemas-upnp-org:service:AVTransport:1#Pause\"" \
+    	-H "Content-Type: text/xml; charset=utf-8" -d "${pause_data}" -s "$1" >/dev/null
+
+	unset pause_data
+}
+
+set_volume() {
+
+	setv_data=""
+
+  setv_data=$(cat <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:SetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+      <InstanceID>0</InstanceID>
+      <Channel>Master</Channel>
+      <DesiredVolume>$2</DesiredVolume>
+    </u:SetVolume>
+  </s:Body>
+</s:Envelope>
+EOF
+)
+#http://192.168.178.26:49152/upnp/control/rendercontrol1'
+
+  curl -H 'Content-Type: text/xml; charset=utf-8' \
+    -H 'SOAPAction: "urn:schemas-upnp-org:service:RenderingControl:1#SetVolume"' \
+    -d "${setv_data}" \
+    -s "$1" >/dev/null
+
+	unset setv_data
+}
+
+get_volume() {
+
+	getv_data=""
+
+  getv_data=$(cat <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+      <InstanceID>0</InstanceID>
+      <Channel>Master</Channel>
+    </u:GetVolume>
+  </s:Body>
+</s:Envelope>
+EOF
+)
+#http://192.168.178.26:49152/upnp/control/rendercontrol1'
+ 
+  curl -H 'Content-Type: text/xml; charset=utf-8' \
+    -H 'SOAPAction: "urn:schemas-upnp-org:service:RenderingControl:1#GetVolume"' \
+    -d "${getv_data}" \
+    -s "$1" \
+  | xmllint --xpath '//*[local-name() = "CurrentVolume"]/text()' -
+
+}
+
+get_content() {
+# browse url=$1 id=$2
+	getc_data=""
+	getc_id="$2"
+	getc_url="$1"
+
+	getc_data=$(cat <<EOF
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>${getc_id}</ObjectID>
+      <BrowseFlag>BrowseDirectChildren</BrowseFlag>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>       
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+  </s:Body>
+</s:Envelope>
+EOF
+)
+
+  curl -X POST \
+    -H "SOAPAction: \"urn:schemas-upnp-org:service:ContentDirectory:1#Browse\"" \
+    -H "Content-Type: text/xml; charset=utf-8" \
+    -d "${getc_data}" \
+    -s "${getc_url}"
+
+	unset getc_data getc_id getc_url
+}
+
+get_meta() {
+# browse meta url=$1 id=$2
+	getm_data=""
+	getm_id="$2"
+	getm_url="$1"
+
+	getm_data=$(cat <<EOF
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>${getm_id}</ObjectID>
+      <BrowseFlag>BrowseMetadata</BrowseFlag>
+      <Filter></Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>0</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+  </s:Body>
+</s:Envelope>
+EOF
+)
+  curl -X POST \
+    -H "SOAPAction: \"urn:schemas-upnp-org:service:ContentDirectory:1#Browse\"" \
+    -H "Content-Type: text/xml; charset=utf-8" \
+    -d "${getm_data}" \
+    -s "${getm_url}"
+
+	unset getm_data getm_id getm_url
+}
+
+do_recode() {
+  
+  sed 's/&lt;/</g;
+    s/&gt;/>/g;
+    s/&nbsp;/ /g;
+    s/&amp;/\&/g;
+    s/&quot;/"/g;
+    s/&apos;/'"'"'/g'
+} 
+
+do_usage() {
+cat <<END
+usage: ${0##*/} [-hsSv] [-l path] [-o target] [command ...]
+
+see man page for more
+END
+}
+
+print() {
+# echo replacement
+	printf '%s\n' "$1"
+}
+
+main "$@"
+
+exit 0
