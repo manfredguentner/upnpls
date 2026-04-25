@@ -259,13 +259,13 @@ do_it() {
 		id=$(print "${result}" | sed -n "${pathpos}p" | awk -F "|" '{print $4}')
 
 		base=$(print "${result}" | sed -n "${pathpos}p" | awk -F "|" '{print $NF}')
-		base=${base:=•}
+		base=${base:=/}
 
 		result=""
 
 		if [ ${i} -eq 1 ]; then id=0; fi
 
-		if [ "${base}" = "•" ]; then 
+		if [ "${base}" = "/" ]; then 
 
   		content=$(get_content "${cdcontrolURL}" "${id}" \
               | xmllint --quiet --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' - 2>/dev/null \
@@ -285,7 +285,7 @@ do_it() {
                 //*[local-name() = "container"]/@id ' - 2>/dev/null \
                 | awk '{getline n;
                         gsub(" id=\"","",$0); gsub("\"","",$0);
-                        print n"| | |"$0"|1|2|•"}' )
+                        print n"| | |"$0"|1|2|/"}' )
  
 		if [ ${#container} -gt 0 ]; then 
 			result="${container}" 
@@ -296,12 +296,15 @@ do_it() {
 
   	if [ ${#itemtmp} -gt 0 ]; then
 
-			print "${content}" \
-			| xmllint --quiet --xpath '//*[local-name() = "item"]/*[local-name() = "res"]/@duration' - >/dev/null 2>&1
+			t0=$(print "${content}" \
+				| xmllint --quiet --xpath 'count(//*[local-name() = "item"]/*[local-name() = "res"]/@duration)' - 2>/dev/null)
 
 			# Needs maybe a better solution. On NetBSD $? is 11, on Debian 10
 			# But for now -ge 10 is fine
-			if [ $? -ge 10 ]; then
+			# fixed finally. counting the elements was the way to go
+	
+#			if [ $? -ge 10 ]; then
+			if [ "${t0}" = "0" ]; then			
 
 				container=$(print "${content}" | xmllint --quiet --xpath '
 					//*[local-name() = "item"]/*[local-name() = "title"]/text() |
@@ -331,11 +334,12 @@ do_it() {
     													next
 												}')
 				# End sad hack
-				container=$(print "${container}" | awk '{id=$0; getline title; getline url; 
-									gsub(" id=\"","",id); gsub("\"","",id);
-									print title"|-1|"url"|"id"|1|2|»"}' ) 
 
-				#"$_title|$_dur|$_url|$_id|1|2|»"
+				container=$(print "${container}" | awk '{id=$0; getline title; getline url; 
+									gsub(/ id="/,"",id); gsub(/"/,"",id);
+									print title"|-1|"url"|"id"|1|2|*"}' ) 
+
+				#"$_title|$_dur|$_url|$_id|1|2|*"
 			else
 				container=$(print "${content}" | xmllint --quiet --xpath '
 					//*[local-name() = "item"]/*[local-name() = "title"]/text() |
@@ -343,9 +347,9 @@ do_it() {
 					//*[local-name() = "item"]/*[local-name() = "res"]/text() |						
 					//*[local-name() = "item"]/@id' - 2>/dev/null \
 					| awk '{id=$0; getline title; getline dur; getline url; 
-									gsub(" duration=\"","",dur); gsub("\"","",dur);
-									gsub(" id=\"","",id); gsub("\"","",id);
-									print title"|"dur"|"url"|"id"|1|2|»"}' ) 
+									gsub(/ duration="/,"",dur); gsub(/"/,"",dur);
+									gsub(/ id="/,"",id); gsub(/"/,"",id);
+									print title"|"dur"|"url"|"id"|1|2|*"}' ) 
 
 			fi
 
@@ -392,16 +396,16 @@ do_it() {
 		f|filter)
 			case "${action}" in
 				url)
-					print "${result}" | awk -F "|" '{if ($NF ~ /»/) print $3}' \
+					print "${result}" | awk -F "|" '{if ($NF ~ /*/) print $3}' \
 						| sed -n "${select}"
 					;;
 				list)
 					print "${result}" | do_recode \
-						| awk -F "|" '{if ($NF ~ /»/) print $0}' \
+						| awk -F "|" '{if ($NF ~ /*/) print $0}' \
 						| sed -n "${select}"
 					;;
 				meta)
-					print "${result}" | awk -F "|" '{if ($NF ~ /»/) print $4}' \
+					print "${result}" | awk -F "|" '{if ($NF ~ /*/) print $4}' \
 						| sed -n "${select}" | while read -r line
 						do
 							if [ "${verbose}" -eq 1 ]; then
