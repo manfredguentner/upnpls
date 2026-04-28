@@ -236,7 +236,7 @@ do_it() {
 	
 	devicenum=$(print "${browsepath}" | awk -F "." '{print $2}')
 	cdcontrolURL=$(print "${devices}" | sed "${devicenum}q;d" | awk -F "|" '{print $5}')
-	plen=$(print "${browsepath}" | awk -F "." '{gsub(/^./,"",$0); print NF}')	
+	plen=$(print "${browsepath}" | awk -F "." '{gsub(/^\./,"",$0); print NF}')	
 
 
 	i=1
@@ -297,14 +297,12 @@ do_it() {
   	if [ ${#itemtmp} -gt 0 ]; then
 
 			t0=$(print "${content}" \
-				| xmllint --quiet --xpath 'count(//*[local-name() = "item"]/*[local-name() = "res"]/@duration)' - 2>/dev/null)
+			| xmllint --quiet --xpath 'count(//*[local-name() = "item"]/*[local-name() = "res"]/@duration)' - 2>/dev/null)
 
 			# Needs maybe a better solution. On NetBSD $? is 11, on Debian 10
 			# But for now -ge 10 is fine
-			# fixed finally. counting the elements was the way to go
-	
-#			if [ $? -ge 10 ]; then
-			if [ "${t0}" = "0" ]; then			
+			#if [ $? -ge 10 ]; then
+			if [ "${t0}" = "0" ]; then
 
 				container=$(print "${content}" | xmllint --quiet --xpath '
 					//*[local-name() = "item"]/*[local-name() = "title"]/text() |
@@ -334,9 +332,8 @@ do_it() {
     													next
 												}')
 				# End sad hack
-
 				container=$(print "${container}" | awk '{id=$0; getline title; getline url; 
-									gsub(/ id="/,"",id); gsub(/"/,"",id);
+									gsub(" id=\"","",id); gsub("\"","",id);
 									print title"|-1|"url"|"id"|1|2|*"}' ) 
 
 				#"$_title|$_dur|$_url|$_id|1|2|*"
@@ -347,8 +344,8 @@ do_it() {
 					//*[local-name() = "item"]/*[local-name() = "res"]/text() |						
 					//*[local-name() = "item"]/@id' - 2>/dev/null \
 					| awk '{id=$0; getline title; getline dur; getline url; 
-									gsub(/ duration="/,"",dur); gsub(/"/,"",dur);
-									gsub(/ id="/,"",id); gsub(/"/,"",id);
+									gsub(" duration=\"","",dur); gsub("\"","",dur);
+									gsub(" id=\"","",id); gsub("\"","",id);
 									print title"|"dur"|"url"|"id"|1|2|*"}' ) 
 
 			fi
@@ -396,16 +393,16 @@ do_it() {
 		f|filter)
 			case "${action}" in
 				url)
-					print "${result}" | awk -F "|" '{if ($NF ~ /*/) print $3}' \
+					print "${result}" | awk -F "|" '{if ($NF ~ /\*/) print $3}' \
 						| sed -n "${select}"
 					;;
 				list)
 					print "${result}" | do_recode \
-						| awk -F "|" '{if ($NF ~ /*/) print $0}' \
+						| awk -F "|" '{if ($NF ~ /\*/) print $0}' \
 						| sed -n "${select}"
 					;;
 				meta)
-					print "${result}" | awk -F "|" '{if ($NF ~ /*/) print $4}' \
+					print "${result}" | awk -F "|" '{if ($NF ~ /\*/) print $4}' \
 						| sed -n "${select}" | while read -r line
 						do
 							if [ "${verbose}" -eq 1 ]; then
@@ -500,7 +497,8 @@ get_devices() {
 
 		if [ -e "${gd_config}" ]; then
 			#gd_order=$( cat "${gd_config}" | awk '/^deviceorder/ {gsub(/deviceorder\=\"/,"",$1);gsub(/\"/,"",$0);print}') 
-			gd_order=$(awk '/^deviceorder/ {gsub(/deviceorder\=\"/,"",$1);gsub(/\"/,"",$0);print}' "${gd_config}") 
+			##gd_order=$(awk '/^deviceorder/ {gsub(/deviceorder\=\"/,"",$1);gsub(/\"/,"",$0);print}' "${gd_config}") 
+			gd_order=$(awk '/^deviceorder/ {gsub("deviceorder=\"","",$1);gsub("\"","",$0);print}' "${gd_config}") 
 
 			if [ "${gd_order:=false}" = "false" ]; then
 				print "${gd_devices}" > "${gd_devicefile}"
