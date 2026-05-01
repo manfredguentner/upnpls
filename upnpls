@@ -297,7 +297,8 @@ do_it() {
   	if [ ${#itemtmp} -gt 0 ]; then
 
 			t0=$(print "${content}" \
-			| xmllint --quiet --xpath 'count(//*[local-name() = "item"]/*[local-name() = "res"]/@duration)' - 2>/dev/null)
+			| xmllint --quiet --xpath 'count(//*[local-name() 
+					= "item"]/*[local-name() = "res"]/@duration)' - 2>/dev/null)
 
 			# Needs maybe a better solution. On NetBSD $? is 11, on Debian 10
 			# But for now -ge 10 is fine
@@ -407,7 +408,8 @@ do_it() {
 						do
 							if [ "${verbose}" -eq 1 ]; then
 								get_meta "${cdcontrolURL}" "${line}" \
-									| xmllint --quiet --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' - | do_recode
+									| xmllint --quiet --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' - \
+                  | do_recode
 							else
 								get_meta "${cdcontrolURL}" "${line}" \
 									| xmllint --quiet --xpath '//*[local-name() = "BrowseResponse"]/Result/text()' -
@@ -421,7 +423,7 @@ do_it() {
 					print "${asciipath}"
 					print "${result}" | do_recode \
 						| awk -F "|" -v bp="${browsepath}" '{print bp"."NR" "$7" "$1}' \
-						| sed -n "${select}"	
+						| sed -n "${select}" 
 					print "${asciipath}"
 				else
 					print "${result}" | do_recode \
@@ -450,7 +452,8 @@ show_devices() {
 				if [ "$2" = "av" ]; then
         	print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^AVTransport/{print      "Renderer: ."i" "$3}'
 				elif [ "$2" = "cd" ]; then
-        	print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^ContentDirectory/{print "Server:   ."i" "$3}'
+        	#print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^ContentDirectory/{print "Server:   ."i" "$3}'
+        	print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^ContentDirectory/{print "."i" . "$3}'
 				elif [ "$2" = "all" ]; then
 					print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^AVTransport/{print      "Renderer: ."i" "$3}'
 					print "${sd_line}" | awk -F "|" -v i="${sd_i}" '/^ContentDirectory/{print "Server:   ."i" "$3}'
