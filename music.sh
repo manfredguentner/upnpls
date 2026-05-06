@@ -27,7 +27,7 @@ do
     path=$(printf "${key}" | awk '{print $2}')
 
     case ${item} in
-      \*) upnpls -o f=url "${path}" | mpv --quiet --volume=50 --playlist=-
+      \*) upnpls -o f=url "${path}" | icyext -tu - | mpg123 -q -f 12000 -
           path=$(printf "${path}" | awk '{gsub(/.[0-9]+$/,"",$0); print $0}')
           if [ "${path}" = "" ]; then
             path="."
